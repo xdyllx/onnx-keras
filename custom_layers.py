@@ -5,6 +5,9 @@ from keras.layers.core import Layer
 
 
 class LRN(Layer):
+    """
+      Custom LRN layer
+    """
     def __init__(self, alpha=0.0001, k=1, beta=0.75, n=5, **kwargs):
         self.alpha = alpha
         self.k = k
@@ -40,6 +43,12 @@ class LRN(Layer):
 
 
 class GroupConv(_Conv):
+    """
+      Custom convolution layer which implements group attribute.
+      When group==1, it implements the _Conv functions;
+      when group>1, it will split input with channel axis and then implement
+      convolution to each input and finally concatenate to the final result.
+    """
     def __init__(self, group, **kwargs):
         self.group = group
         super(GroupConv, self).__init__(**kwargs)
@@ -87,7 +96,19 @@ class GroupConv(_Conv):
             k_size = K.int_shape(self.kernel)[-1] / self.group
             output_list = list()
             for i in range(self.group):
-                if self.rank == 2:
+                if self.rank == 1:
+                    if self.data_format == 'channels_first':
+                        output_list.append(self.cal_conv(
+                            x[:, size * i:size * (i + 1), :],
+                            self.kernel[:, :, k_size * i:k_size * (i + 1)]
+                        ))
+
+                    else:
+                        output_list.append(self.cal_conv(
+                            x[:, :, size * i:size * (i + 1)],
+                            self.kernel[:, :, k_size * i:k_size * (i + 1)]
+                        ))
+                elif self.rank == 2:
                     if self.data_format == 'channels_first':
                         output_list.append(self.cal_conv(
                             x[:, size * i:size * (i + 1), :, :],
@@ -98,6 +119,18 @@ class GroupConv(_Conv):
                         output_list.append(self.cal_conv(
                             x[:, :, :, size * i:size * (i + 1)],
                             self.kernel[:, :, :, k_size * i:k_size * (i + 1)]
+                        ))
+                elif self.rank == 3:
+                    if self.data_format == 'channels_first':
+                        output_list.append(self.cal_conv(
+                            x[:, size * i:size * (i + 1), :, :, :],
+                            self.kernel[:, , :, :, k_size * i:k_size * (i + 1)]
+                        ))
+
+                    else:
+                        output_list.append(self.cal_conv(
+                            x[:, :, :, :, size * i:size * (i + 1)],
+                            self.kernel[:, :, :, :, k_size * i:k_size * (i + 1)]
                         ))
 
             outputs = K.concatenate(output_list, axis=channel_axis)

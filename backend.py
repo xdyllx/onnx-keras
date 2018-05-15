@@ -98,10 +98,6 @@ class OnnxNode(object):
     """
 
     def __init__(self, node):
-        # print('---------------node intro----------')
-        # print(type(node))
-        # print(node)
-        # print('--------------node end-------------')
         self.name = str(node.name)
         self.op_type = str(node.op_type)
         self.attrs = OnnxAttributes.from_onnx(node.attribute)
@@ -132,9 +128,6 @@ class KerasBackend(Backend):
         "exp": K.exp,
         "hardsigmoid": K.hard_sigmoid,
         "log": K.log,
-        "random_normal": K.random_normal,
-        "random_uniform": K.random_uniform,
-
         "relu": K.relu,
         "sigmoid": K.sigmoid,
         "softplus": K.softplus,
@@ -158,7 +151,6 @@ class KerasBackend(Backend):
         'float64',
         'complex64',
         'complex128',
-
     ]
 
     attr_translator = {
@@ -169,6 +161,14 @@ class KerasBackend(Backend):
 
     @classmethod
     def get_keras_pad(cls, x, pads, dim, data_format=None):
+        """
+        implement pad in conv or pool operator
+        :param x: input tensor
+        :param pads: pads attribute in conv or pool operator
+        :param dim: the pad dim
+        :param data_format: data format of x
+        :return: the result tensor of input tensor implementing padding operation
+        """
         if sum(pads) == 0:
             return x
         if len(pads) == dim * 2:
@@ -186,24 +186,37 @@ class KerasBackend(Backend):
             raise NotImplementedError("padding with dim {} is not implemented.".format(dim))
 
     @classmethod
-    def _explicit_broadcast(cls, tensor, broadcast_dim=1, total_num_dim=4):
+    def _explicit_broadcast(cls, array, broadcast_dim=1, total_num_dim=4):
+        """
+        implement broadcast operation to a numpy array
+        :param array: input numpy array
+        :param broadcast_dim: broadcast axis
+        :param total_num_dim: total number of broadcast dimensions
+        :return: broadcasted numpy array
+        """
         if not isinstance(broadcast_dim, list):
             broadcast_dim = [broadcast_dim]
 
         for i in range(total_num_dim):
             if i not in broadcast_dim:
-                tensor = np.expand_dims(tensor, i)
+                array = np.expand_dims(array, i)
 
-        return tensor
+        return array
 
     @classmethod
     def _bin_op(cls, node, input_dict, op_func, inputlist=True):
+        """
+        handle binary operator
+        :param node: Onnxnode
+        :param input_dict: input dict
+        :param op_func: keras function
+        :param inputlist: boolean variable, true means inputs of op_func is list type
+        :return: kreas layer of the binary operator
+        """
         x = input_dict[node.inputs[0]]
         y = input_dict[node.inputs[1]]
-        # print(node.op_type, x.shape, y.shape)
+
         if isinstance(y, np.ndarray):
-            # print('is numpy')
-            # tmp = np.reshape(y, [1]+list(y.shape))
             tmp = np.tile(y, [32] + [1] * len(y.shape))
             cls.extra_input_array.append(tmp)
             y = keras.layers.Input(shape=tmp.shape[1:])
@@ -301,6 +314,13 @@ class KerasBackend(Backend):
 
     @classmethod
     def prepare(cls, model, device='CPU', **kwargs):
+        """
+        convert an onnx model to keras model
+        :param model: onnx model
+        :param device: 'CPU' or 'GPU' depending on the device
+        :param kwargs: 
+        :return: keras model
+        """
         super(KerasBackend, cls).prepare(model, device, **kwargs)
 
         original_input_dict, predict_net = (
@@ -318,7 +338,6 @@ class KerasBackend(Backend):
 
         print(res_model.layers)
         return res_model
-        # return TensorflowRep(predict_net, original_input_dict, uninitialized)
 
     @classmethod
     def onnx_initializer_to_input_dict_items(cls,
@@ -354,6 +373,14 @@ class KerasBackend(Backend):
 
     @classmethod
     def run_node(cls, node, inputs, uninit=[0]):
+        """
+        run the keras model converted from the onnx node with given inputs.
+        used for unit test.
+        :param node: onnx node
+        :param inputs: inputs
+        :param uninit: index of inputs which need to 
+        :return: output dict of model
+        """
         super(KerasBackend, cls).run_node(node, inputs)
         node = OnnxNode(node)
         input_tensor = list()
@@ -383,6 +410,12 @@ class KerasBackend(Backend):
 
     @classmethod
     def run_model(cls, model, inputs):
+        """
+        given an onnx model, convert it to a keras model and run it with given inputs
+        :param model: onnx model
+        :param inputs: inputs
+        :return: outputs of the keras model with the given inputs
+        """
         keras_model = cls.prepare(model)
         inputs += cls.extra_input_array
         res = keras_model.predict(inputs)
@@ -515,7 +548,7 @@ class KerasBackend(Backend):
         return [keras.layers.concatenate(values, axis=axis)]
 
     @classmethod
-    def _conv(cls, node, input_dict, transpose=False):
+    def _conv(cls, node, input_dict):
         x = input_dict[node.inputs[0]]
 
         x_rank = len(x.get_shape())
@@ -578,7 +611,7 @@ class KerasBackend(Backend):
         if is_test:
             return [x]
         ratio = node.attrs["ratio"] if "ratio" in node.attrs.keys() else 0.5
-        return [Lambda(lambda a: K.dropout(a, ratio))(x)]  # ratio or 1-ratio?
+        return [Lambda(lambda a: K.dropout(a, ratio))(x)]
 
     @classmethod
     def handle_elu(cls, node, input_dict):
@@ -595,11 +628,13 @@ class KerasBackend(Backend):
 
     @classmethod
     def handle_greater(cls, node, input_dict):
-        return [cls._bin_op(node, input_dict, Lambda(lambda x, y: K.greater(x, y)), inputlist=False)]
+        # TODO attr broadcast
+        return [cls._bin_op(node, input_dict, Lambda(lambda x: K.greater([0], x[1])), inputlist=True)]
 
     @classmethod
     def handle_less(cls, node, input_dict):
-        return [cls._bin_op(node, input_dict, Lambda(lambda x, y: K.less(x, y)), inputlist=False)]
+        # TODO attr broadcast
+        return [cls._bin_op(node, input_dict, Lambda(lambda x: K.less(x[0], x[1])), inputlist=True)]
 
     @classmethod
     def handle_flatten(cls, node, input_dict):
@@ -839,7 +874,7 @@ class KerasBackend(Backend):
             raise NotImplementedError
 
         if return_sequences:
-            # onnx[seq_length, num_directions, batch_size, hidden_size] keras:[samples,timesteps,output_dim]
+            # onnx[seq_length, num_directions, batch_size, hidden_size] keras[samples,timesteps,output_dim]
             res = Lambda(lambda _x: K.expand_dims(K.permute_dimensions(_x, [1, 0, 2]), axis=1))(rnn)
         else:
             # onnx[num_directions, batch_size, hidden_size] keras[samples,output_dim]
